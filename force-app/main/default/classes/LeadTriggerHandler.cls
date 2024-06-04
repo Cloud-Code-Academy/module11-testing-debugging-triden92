@@ -14,7 +14,36 @@
  * https://developer.salesforce.com/docs/atlas.en-us.apexcode.meta/apexcode/apex_dml_convertLead.htm
  * https://developer.salesforce.com/docs/atlas.en-us.apexref.meta/apexref/apex_methods_system_test.htm
  */
-public with sharing class LeadTriggerHandler {
+public with sharing class LeadTriggerHandler extends TriggerHandler{
+	private List<Lead> newLeadList;
+	private Map<Id,Lead> newLeadMap;
+	private List<Lead> oldLeadList;
+	private Map<Id,Lead> oldLeadMap;
+
+	public LeadTriggerHandler(){
+		this.newLeadList = (List<Lead>)Trigger.new;
+		this.newLeadMap = (Map<Id,Lead>)Trigger.newMap;
+		this.oldLeadList = (List<Lead>)Trigger.old;
+		this.oldLeadMap = (Map<Id,Lead>)Trigger.oldMap;
+	}
+
+	public override void beforeInsert(){
+		handleTitleNormalization(newLeadList);
+		handleAutoLeadScoring(newLeadList);
+
+	}
+
+	public override void beforeUpdate(){
+		handleTitleNormalization(newLeadList);
+		handleAutoLeadScoring(newLeadList);
+	}
+
+	public override void afterInsert(){
+		handleLeadAutoConvert(newLeadList);
+	}
+	public override void afterUpdate(){
+		handleLeadAutoConvert(newLeadList);
+	}
 	/* 
 	 * Question 1
 	 * Requirement Lead Title Normalization - handleTitleNormalization
@@ -32,20 +61,27 @@ public with sharing class LeadTriggerHandler {
 	 */
 	public static void handleTitleNormalization(List<Lead> leadsToNormalize) {
 		for (Lead ld : leadsToNormalize) {
-			if (ld.title == 'vp' || ld.title.contains('v.p.') || ld.title.contains('vice president')) {
-				ld.Title = 'Vice President';
-			} else if (
-				ld.title.contains('mgr') ||
-				ld.title.contains('manage') ||
-				ld.title.contains('head of department')
-			) {
-				ld.Title = 'Manager';
-			} else if (ld.title.contains('exec') || ld.title == 'chief' || ld.title.contains('head')) {
-				ld.Title = 'Executive';
-			} else if (ld.title.contains('assist') || ld.title.contains('deputy') || ld.title == 'jr') {
-				ld.Title = 'Assistant';
+			String origTitle = ld.Title.toLowerCase();
+			String cleanTitle ='';
+			if (origTitle.contains('vp') || origTitle.contains('v.p.') || origTitle.contains('vice president')) {
+				String regex = '(?i)\\b(vp|v\\.p\\.|vice president)\\b';
+				cleanTitle = origTitle.replaceAll(regex,'Vice President');
+				ld.Title = cleanTitle;
+			} else if (origTitle.contains('mgr') ||origTitle.contains('manage') || origTitle.contains('head of department')) { 
+				String regex = '(?i)\\b(\\bmgr\\b|\\bmanage\\b|\\bhead of department\\b)\\b';
+				cleanTitle = origTitle.replaceAll(regex, 'Manager');
+				ld.Title = cleanTitle;
+			} else if (origTitle.contains('exec') || origTitle.contains('chief') || origTitle.contains('head')) {
+				String regex = '(?i)\\b(\\bexec\\b|\\bchief\\b|\\bhead\\b)\\b';
+				cleanTitle = origTitle.replaceAll(regex, 'Executive');
+				ld.Title = cleanTitle;
+			} else if (origTitle.contains('assist') || origTitle.contains('deputy') || origTitle.contains('jr')) {
+				String regex = '(?i)\\b(\\bassist\\b|\\bdeputy\\b|\\bjr\\b)\\b';
+				cleanTitle = origTitle.replaceAll(regex, 'Assistant');
+				ld.Title = cleanTitle;
 			}
 		}
+		
 	}
 
 	/* 
@@ -61,23 +97,24 @@ public with sharing class LeadTriggerHandler {
 	 */
 	public static void handleAutoLeadScoring(List<Lead> leadsToScore) {
 		for (Lead ld : leadsToScore) {
-			Integer score = 10;
+			Integer score = 0;
 
 			// Check and add points based on the specified conditions
 			if (ld.LeadSource == 'Website' && ld.Email != null) {
-				score = 3;
+				score += 3;
 			}
 
 			if (ld.Phone != null) {
-				score = 5;
+				score += 5;
 			}
 
 			if (ld.Industry == 'Technology') {
-				score = 10;
+				score += 10;
 			}
 
 			ld.Lead_Score__c = score; // Set the computed score back to the lead
 		}
+		
 	}
 
 	/* 
@@ -113,12 +150,14 @@ public with sharing class LeadTriggerHandler {
 		// Step 2: Find matching contacts based on email
 		Map<String, Contact> emailToContactMap = new Map<String, Contact>();
 		for (Contact c : [SELECT Id, Email, AccountId FROM Contact WHERE Email IN :leadToEmailMap.values()]) {
-			if (!emailToContactMap.containsKey(c.Email)) {
-				emailToContactMap.put(c.Email, c);
-			} else {
-				// If we found another contact with the same email, we don't auto-convert.
-				// So we remove the email from the map.
-				emailToContactMap.remove(c.Email);
+			emailToContactMap.put(c.Email,c);
+		}
+		for(Lead ld :leads){
+			if(!ld.IsConverted && !emailToContactMap.containsKey(ld.Email) && ld.Email != null){
+				continue;
+			}
+			else{
+				leadToEmailMap.remove(ld.Id);
 			}
 		}
 
